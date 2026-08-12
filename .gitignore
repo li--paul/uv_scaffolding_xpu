@@ -1,0 +1,8 @@
+# virtual environment
+.venv/
+
+# third-party source checkouts (re-clone via setup.sh)
+vendor/
+
+# build logs
+*.log
