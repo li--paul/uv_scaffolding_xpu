@@ -123,6 +123,7 @@ vllm-omni = { path = "vendor/vllm-omni" }
 
 [[tool.uv.dependency-metadata]]
 name = "vllm"
+version = "0.26.0"
 requires-dist = [
     "ray>=2.9",
     "cmake>=3.26.1",
@@ -200,6 +201,7 @@ requires-dist = [
 
 [[tool.uv.dependency-metadata]]
 name = "vllm-omni"
+version = "0.26.0"
 requires-dist = [
     "transformers>=5.5.3",
     "av>=14.0.0",

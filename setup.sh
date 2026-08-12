@@ -17,9 +17,13 @@ VLLM_OMNI_VER="v0.26.0"
 
 # Intel oneAPI toolchain + oneCCL (needed to build vllm for XPU). No-op when
 # the environment is already sourced (e.g. this host sources it globally).
+# oneAPI's env scripts are not `set -u` compatible (they read unset vars such
+# as OCL_ICD_FILENAMES without a default), so disable nounset while sourcing.
 if [ -f /opt/intel/oneapi/setvars.sh ]; then
+    set +u
     source /opt/intel/oneapi/setvars.sh --force
     source /opt/intel/oneapi/ccl/2022.1/env/vars.sh --force 2>/dev/null || true
+    set -u
 fi
 
 # Install CPython 3.12 (required by vllm-omni) and sync the environment.
