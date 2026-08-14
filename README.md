@@ -96,7 +96,15 @@ sysfs counters instead (busy %, frequency, power, temperature):
 
 ```bash
 .venv/bin/python gpu_monitor.py --interval 2
+# or via the wrapper:
+./gpu-monitor.sh --interval 2
 ```
+
+Options:
+
+- `--interval <sec>` — sampling period (default 2 s)
+- `--count <n>` — number of samples, `0` = run forever (default 0)
+- `--device-id <hex>` — PCI device id to monitor (default `0xe223`, the B70)
 
 ## Usage
 
