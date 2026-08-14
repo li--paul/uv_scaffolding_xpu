@@ -66,6 +66,38 @@ rm -rf .venv && uv sync
 PYTHONPATH=vendor/ComfyUI .venv/bin/python -c "import comfy.model_management as mm; print(mm.get_torch_device())"   # xpu:0
 ```
 
+## Peak FLOPS benchmark
+
+`bench_matmul.py` measures achieved peak compute (TFLOPS) of a square
+`N x N` matrix multiply for several dtypes via `torch.matmul`:
+
+```bash
+.venv/bin/python bench_matmul.py --n 8192 --iters 10
+```
+
+Results on the target GPU (Intel Arc B70, 256 EUs, ~30 GiB):
+
+| dtype | time (N=8192) | TFLOPS |
+|-------|---------------|--------|
+| fp64  | 773.7 ms | 1.4 |
+| fp32  | 48.7 ms | 22.6 |
+| fp16  | 6.9 ms | 160.5 |
+| bf16  | 6.9 ms | 159.4 |
+| int8  | 3.2 ms | 342.4 |
+
+fp16/bf16/int8 use the XMX/DPAS matrix engines; fp32 runs on the vector
+lanes and fp64 is emulated. Native int4 (`torch.quint4x2`) has no matmul
+kernel on XPU, so 4-bit GEMMs must be emulated as two int8 GEMMs
+(nibble-split), capping effective peak at roughly half of int8.
+
+`xpu-smi` (Intel) cannot read telemetry on this host (Sysman fails for the
+B70 in the current compute runtime), so `gpu_monitor.py` reads the Xe driver
+sysfs counters instead (busy %, frequency, power, temperature):
+
+```bash
+.venv/bin/python gpu_monitor.py --interval 2
+```
+
 ## Usage
 
 ### vLLM-Omni (OpenAI-compatible server, XPU)

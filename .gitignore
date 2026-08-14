@@ -6,3 +6,6 @@ vendor/
 
 # build logs
 *.log
+
+# NEO compute-runtime debug dump
+igdrcl_dumped.config
