@@ -12,7 +12,6 @@ counters:
 import argparse
 import glob
 import os
-import subprocess
 import sys
 import time
 
@@ -92,39 +91,6 @@ class Power:
         return out
 
 
-class NvidiaGpu:
-    def __init__(self, index):
-        self.index = index
-        self.name = self._query("name")
-        self.last = {}
-
-    def _query(self, field):
-        try:
-            out = subprocess.run(
-                [
-                    "nvidia-smi",
-                    f"--query-gpu={field}",
-                    f"--id={self.index}",
-                    "--format=csv,noheader,nounits",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            return out.stdout.strip().split("\n")[0].strip()
-        except (OSError, subprocess.SubprocessError, IndexError):
-            return "n/a"
-
-    def sample(self):
-        return {
-            "util": self._query("utilization.gpu"),
-            "mem": self._query("memory.used"),
-            "mem_total": self._query("memory.total"),
-            "pwr": self._query("power.draw"),
-            "temp": self._query("temperature.gpu"),
-        }
-
-
 def main():
     p = argparse.ArgumentParser(description="Intel Arc (xe) real-time GPU monitor")
     p.add_argument("--interval", type=float, default=2.0, help="sample interval in seconds")
@@ -147,31 +113,16 @@ def main():
     hwmon = glob.glob(os.path.join(dev, "hwmon", "hwmon*"))
     power = Power(hwmon[0]) if hwmon else None
 
-    nvidia = []
-    try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader,nounits"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        for line in out.stdout.strip().splitlines():
-            nvidia.append(NvidiaGpu(int(line.split()[0])))
-    except (OSError, subprocess.SubprocessError, ValueError):
-        pass
-
     for gt in gts:
         gt.sample()
     if power:
         power.sample()
 
-    header_parts = [f"{gt.name:>6s}busy  freq(MHz)" for gt in gts]
-    if power:
-        header_parts += [f"{lbl:>7s}W" for lbl in power.labels.values()] + ["pkg(C)", "vram(C)"]
-    for g in nvidia:
-        short = g.name.replace("NVIDIA ", "").split()[0] if g.name != "n/a" else f"NV{g.index}"
-        header_parts.append(f"{short:>7s} util% memGiB  W tempC")
-    header = "  ".join(header_parts)
+    header = "  ".join(
+        [f"{gt.name:>6s}busy  freq(MHz)" for gt in gts]
+        + [f"{lbl:>7s}W" for lbl in (power.labels.values() if power else [])]
+        + ["pkg(C)", "vram(C)"]
+    )
     print(header)
     print("-" * len(header))
 
@@ -190,11 +141,6 @@ def main():
             parts.append("  ".join(f"{w.get(lbl, 0):7.1f}" for lbl in power.labels.values()))
             t = power.temps()
             parts.append(f"{t.get('pkg', float('nan')):7.1f} {t.get('vram', float('nan')):7.1f}")
-        for g in nvidia:
-            s = g.sample()
-            parts.append(
-                f"{s['util']:>6s}% {int(float(s['mem'])/1024):>5d} {s['pwr']:>6s} {s['temp']:>4s}"
-            )
         print("  ".join(parts), flush=True)
 
 
