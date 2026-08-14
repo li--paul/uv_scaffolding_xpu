@@ -92,7 +92,9 @@ kernel on XPU, so 4-bit GEMMs must be emulated as two int8 GEMMs
 
 `xpu-smi` (Intel) cannot read telemetry on this host (Sysman fails for the
 B70 in the current compute runtime), so `gpu_monitor.py` reads the Xe driver
-sysfs counters instead (busy %, frequency, power, temperature):
+sysfs counters instead (busy %, frequency, power, temperature). It lists the
+two GPUs separately: the B70's compute/media engines (gt0/gt1) and the
+NVIDIA RTX 6000 Ada via `nvidia-smi` (util, memory, power, temp):
 
 ```bash
 .venv/bin/python gpu_monitor.py --interval 2
