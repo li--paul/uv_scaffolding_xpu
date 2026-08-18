@@ -15,6 +15,11 @@ VLLM_OMNI_VER="v0.26.0"
 [ -d "$ROOT/vendor/vllm-omni" ] || git clone --depth 1 --branch "$VLLM_OMNI_VER" https://github.com/vllm-project/vllm-omni.git "$ROOT/vendor/vllm-omni"
 [ -d "$ROOT/vendor/ComfyUI" ] || git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git "$ROOT/vendor/ComfyUI"
 
+# ComfyUI custom node: H3 Motion Context (clip chaining for MiniMax H3). Runtime
+# patches only, installed lazily on first use of a node; no extra pip deps.
+CUSTOM_NODES="$ROOT/vendor/ComfyUI/custom_nodes/ComfyUI-H3-Motion-Context"
+[ -d "$CUSTOM_NODES" ] || git clone --depth 1 https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context.git "$CUSTOM_NODES"
+
 # Intel oneAPI toolchain + oneCCL (needed to build vllm for XPU). No-op when
 # the environment is already sourced (e.g. this host sources it globally).
 # oneAPI's env scripts are not `set -u` compatible (they read unset vars such
