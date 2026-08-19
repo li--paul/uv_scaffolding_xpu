@@ -47,6 +47,26 @@ def find_cards(device_id=None):
     return cards
 
 
+def card_bdf(card):
+    path = os.path.realpath(os.path.join(card, "device"))
+    name = os.path.basename(path)
+    return name if name.startswith("0000:") else None
+
+
+def xpu_index_map():
+    """Map PCI BDF -> torch xpu index, via the Level-Zero UUID (embeds bus:device)."""
+    try:
+        import torch
+
+        m = {}
+        for i in range(torch.xpu.device_count()):
+            bd = str(torch.xpu.get_device_properties(i).uuid).split("-")[3]
+            m[f"0000:{bd[:2]}:{bd[2:]}.0"] = i
+        return m
+    except Exception:
+        return {}
+
+
 class Gt:
     def __init__(self, path, name):
         self.path = path
@@ -156,6 +176,7 @@ def main():
             sys.exit(f"no card found matching device id {device_id}")
         sys.exit("no Intel Arc (xe driver) card found")
 
+    xpu_map = xpu_index_map()
     monitors = []
     for card in cards:
         dev = os.path.join(card, "device")
@@ -165,18 +186,18 @@ def main():
                 gts.append(Gt(gt, os.path.basename(gt)))
         hwmon = glob.glob(os.path.join(dev, "hwmon", "hwmon*"))
         power = Power(hwmon[0]) if hwmon else None
-        monitors.append((os.path.basename(card), gts, power))
+        monitors.append((os.path.basename(card), xpu_map.get(card_bdf(card)), gts, power))
 
     print(f"monitoring {len(monitors)} Intel Arc card(s)")
-    for _, gts, power in monitors:
+    for _, _, gts, power in monitors:
         for gt in gts:
             gt.sample()
         if power:
             power.sample()
 
-    ncols = max((len(m[1]) for m in monitors), default=1)
+    ncols = max((len(m[2]) for m in monitors), default=1)
     labels = []
-    for _, _, power in monitors:
+    for _, _, _, power in monitors:
         if power:
             labels = list(power.labels.values())
             break
@@ -187,7 +208,7 @@ def main():
     def fmt_freq(f):
         return f"{f:>5s}" if f is not None else "  n/a"
 
-    header = [" " * 4]
+    header = ["card", "xpu"]
     for gi in range(ncols):
         header += [f"gt{gi}busy", "gt" + str(gi) + "MHz"]
     header += [lbl for lbl in labels] + ["pkg(C)", "vram(C)"]
@@ -200,11 +221,11 @@ def main():
     while args.count == 0 or n < args.count:
         time.sleep(args.interval)
         n += 1
-        if not warned and any(gt.frozen for _, gts, _ in monitors for gt in gts):
+        if not warned and any(gt.frozen for _, _, gts, _ in monitors for gt in gts):
             warned = True
             print("note: gtidle idle_residency counter is not advancing; busy% is estimated from cur_freq", flush=True)
-        for card, gts, power in monitors:
-            cells = [f"{card:>6s}"]
+        for card, xidx, gts, power in monitors:
+            cells = [f"{card:>6s}", f"{'xpu' + str(xidx) if xidx is not None else 'n/a':>6s}"]
             for gt in gts:
                 busy, cur, act = gt.sample()
                 cells.append(fmt_busy(busy))
