@@ -150,6 +150,11 @@ async function startJob() {
   const prompt = $("prompt").value.trim();
   const mode = document.querySelector('input[name="mode"]:checked').value;
   if (!prompt) { alert("Please enter a prompt."); return; }
+  // Flip to running immediately on click for instant feedback.
+  setStatus("running");
+  $("logBox").textContent = "";
+  $("progressLine").textContent = "";
+  $("resultArea").innerHTML = '<p class="meta">Generating...</p>';
   try {
     const r = await fetch("/api/generate", {
       method: "POST",
@@ -158,17 +163,18 @@ async function startJob() {
     });
     if (!r.ok) {
       const e = await r.json().catch(() => ({}));
+      setStatus("idle");
+      $("resultArea").innerHTML = '<div class="err-box">Failed to start: ' +
+        (e.detail || r.statusText) + '</div>';
       alert("Failed to start: " + (e.detail || r.statusText));
       return;
     }
     const d = await r.json();
     $("jobMeta").textContent = "job " + d.job_id + " started";
     state.seq = 0;               // fresh log view for this job
-    $("logBox").textContent = "";
-    setStatus("running");
-    $("resultArea").innerHTML = '<p class="meta">Generating...</p>';
     startPolling();
   } catch (err) {
+    setStatus("idle");
     alert("Network error: " + err);
   }
 }

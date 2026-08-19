@@ -85,6 +85,7 @@ else
         --distilled-lora    "$MODELS/loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors"
     )
     have_flag --num-inference-steps || ARGS+=(--num-inference-steps 50)
+    have_flag --num-frames         || ARGS+=(--num-frames 33)
     have_flag --seed                || ARGS+=(--seed 42)
 fi
 have_flag --output-path || ARGS+=("--output-path" "$DEFAULT_OUT")

@@ -214,22 +214,32 @@ async def generate(req: GenerateRequest):
     job_id = f"{stamp}-{os.getpid()}"
     out_name = f"ltx_{stamp}.mp4"
 
-    async with _job_lock:
-        STATE.reset_log()  # fresh log + counters for this job
-        STATE.status = "running"
-        STATE.mode = req.mode
-        STATE.prompt = req.prompt
-        STATE.job_id = job_id
-        STATE.video = None
-        STATE.error_msg = None
-        STATE.started_at = time.strftime("%Y-%m-%d %H:%M:%S")
-        STATE.finished_at = None
-        STATE.append_log(
-            f"[{time.strftime('%H:%M:%S')}] job {job_id} queued ({req.mode}-step)\n"
-        )
-        await _run_job(req.mode, req.prompt, out_name, job_id)
+    # Mark state as running immediately, then run the job in a background task
+    # so the request returns at once and the UI can flip idle -> running instantly.
+    STATE.reset_log()  # fresh log + counters for this job
+    STATE.status = "running"
+    STATE.mode = req.mode
+    STATE.prompt = req.prompt
+    STATE.job_id = job_id
+    STATE.video = None
+    STATE.error_msg = None
+    STATE.started_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    STATE.finished_at = None
+    STATE.append_log(
+        f"[{time.strftime('%H:%M:%S')}] job {job_id} queued ({req.mode}-step)\n"
+    )
+
+    asyncio.create_task(
+        _run_job_locked(req.mode, req.prompt, out_name, job_id)
+    )
 
     return {"job_id": job_id, "output": out_name}
+
+
+async def _run_job_locked(mode: str, prompt: str, out_name: str, job_id: str) -> None:
+    """Acquire the job lock and run the generation as a background task."""
+    async with _job_lock:
+        await _run_job(mode, prompt, out_name, job_id)
 
 
 @app.get("/api/status")
