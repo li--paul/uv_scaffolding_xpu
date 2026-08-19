@@ -24,11 +24,22 @@ def read(path):
         return None
 
 
+def driver_of(card):
+    path = os.path.join(card, "device", "driver")
+    try:
+        return os.path.basename(os.path.realpath(path))
+    except OSError:
+        return None
+
+
 def find_card(device_id=None):
     for card in sorted(glob.glob("/sys/class/drm/card*")):
         if not os.path.isdir(os.path.join(card, "device")):
             continue
-        if read(os.path.join(card, "device", "device")) == device_id:
+        if device_id:
+            if read(os.path.join(card, "device", "device")) == device_id:
+                return card
+        elif driver_of(card) == "xe":
             return card
     return None
 
@@ -92,18 +103,28 @@ class Power:
 
 
 def main():
+    known_series = {"60": "0xe211", "70": "0xe223"}
     p = argparse.ArgumentParser(description="Intel Arc (xe) real-time GPU monitor")
     p.add_argument("--interval", type=float, default=2.0, help="sample interval in seconds")
     p.add_argument("--count", type=int, default=0, help="number of samples (0 = infinite)")
-    p.add_argument("--device-id", default="0xe223", help="PCI device id to match")
+    p.add_argument(
+        "-B",
+        "--series",
+        choices=sorted(known_series),
+        help="Arc B-series model (maps to its PCI device id): %(choices)s",
+    )
+    p.add_argument("--device-id", default=None, help="PCI device id to match (default: auto-detect first Intel Arc/xe card)")
     args = p.parse_args()
 
-    card = find_card(args.device_id)
+    device_id = known_series[args.series] if args.series else args.device_id
+    card = find_card(device_id)
     if not card:
-        sys.exit(f"no card found matching device id {args.device_id}")
+        if device_id:
+            sys.exit(f"no card found matching device id {device_id}")
+        sys.exit("no Intel Arc (xe driver) card found")
     dev = os.path.join(card, "device")
     name = read(os.path.join(dev, "subsystem_device")) or read(os.path.join(dev, "device"))
-    print(f"monitoring {card}  (pci {args.device_id})")
+    print(f"monitoring {card}  ({name})")
 
     gts = []
     for tile in sorted(glob.glob(os.path.join(dev, "tile*"))):
