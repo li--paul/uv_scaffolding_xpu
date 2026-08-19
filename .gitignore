@@ -7,5 +7,9 @@ vendor/
 # build logs
 *.log
 
+# Python bytecode cache
+__pycache__/
+*.pyc
+
 # NEO compute-runtime debug dump
 igdrcl_dumped.config
