@@ -3,7 +3,9 @@
 
 Works without xpu-smi / Sysman by reading the xe kernel driver's sysfs
 counters:
-  - busy %   : delta of gtidle/idle_residency_ms per GT
+  - busy %   : delta of gtidle/idle_residency_ms per GT; if that counter
+               never advances (GT stuck in gt-c0, no RC6), falls back to a
+               frequency-based estimate from freq0/cur_freq
   - frequency: freq0/cur_freq, freq0/act_freq
   - power    : hwmon energy*_input delta (labels "card"/"pkg")
   - temp     : hwmon temp*_input (labels "pkg"/"vram")
@@ -32,16 +34,17 @@ def driver_of(card):
         return None
 
 
-def find_card(device_id=None):
+def find_cards(device_id=None):
+    cards = []
     for card in sorted(glob.glob("/sys/class/drm/card*")):
         if not os.path.isdir(os.path.join(card, "device")):
             continue
         if device_id:
             if read(os.path.join(card, "device", "device")) == device_id:
-                return card
+                cards.append(card)
         elif driver_of(card) == "xe":
-            return card
-    return None
+            cards.append(card)
+    return cards
 
 
 class Gt:
@@ -51,8 +54,27 @@ class Gt:
         self.idle_path = os.path.join(path, "gtidle", "idle_residency_ms")
         self.cur_path = os.path.join(path, "freq0", "cur_freq")
         self.act_path = os.path.join(path, "freq0", "act_freq")
+        self.min_freq = int(read(os.path.join(path, "freq0", "min_freq")) or 0)
+        self.max_freq = int(read(os.path.join(path, "freq0", "max_freq")) or 0)
         self.last_idle = None
         self.last_t = None
+        self.samples = 0
+        self.frozen = False
+
+    def freq_at_floor(self, cur):
+        try:
+            return int(cur) <= self.min_freq
+        except (TypeError, ValueError):
+            return False
+
+    def freq_busy(self, cur):
+        if self.max_freq <= self.min_freq:
+            return None
+        try:
+            c = int(cur)
+        except (TypeError, ValueError):
+            return None
+        return max(0.0, min(100.0, 100 * (c - self.min_freq) / (self.max_freq - self.min_freq)))
 
     def sample(self):
         now = time.monotonic()
@@ -62,7 +84,18 @@ class Gt:
         busy = None
         if self.last_idle is not None:
             dt = now - self.last_t
-            busy = max(0.0, min(100.0, 100 * (1 - (idle - self.last_idle) / (dt * 1000))))
+            idle_delta = idle - self.last_idle
+            self.samples += 1
+            if self.frozen:
+                busy = self.freq_busy(cur)
+            elif idle_delta > 0:
+                busy = max(0.0, min(100.0, 100 * (1 - idle_delta / (dt * 1000))))
+            else:
+                if self.samples == 1 and self.freq_at_floor(cur):
+                    self.frozen = True
+                    busy = self.freq_busy(cur)
+                else:
+                    busy = 100.0
         self.last_idle = idle
         self.last_t = now
         return busy, cur, act
@@ -113,56 +146,75 @@ def main():
         choices=sorted(known_series),
         help="Arc B-series model (maps to its PCI device id): %(choices)s",
     )
-    p.add_argument("--device-id", default=None, help="PCI device id to match (default: auto-detect first Intel Arc/xe card)")
+    p.add_argument("--device-id", default=None, help="PCI device id to match (default: auto-detect all Intel Arc/xe cards)")
     args = p.parse_args()
 
     device_id = known_series[args.series] if args.series else args.device_id
-    card = find_card(device_id)
-    if not card:
+    cards = find_cards(device_id)
+    if not cards:
         if device_id:
             sys.exit(f"no card found matching device id {device_id}")
         sys.exit("no Intel Arc (xe driver) card found")
-    dev = os.path.join(card, "device")
-    name = read(os.path.join(dev, "subsystem_device")) or read(os.path.join(dev, "device"))
-    print(f"monitoring {card}  ({name})")
 
-    gts = []
-    for tile in sorted(glob.glob(os.path.join(dev, "tile*"))):
-        for gt in sorted(glob.glob(os.path.join(tile, "gt*"))):
-            gts.append(Gt(gt, os.path.basename(gt)))
+    monitors = []
+    for card in cards:
+        dev = os.path.join(card, "device")
+        gts = []
+        for tile in sorted(glob.glob(os.path.join(dev, "tile*"))):
+            for gt in sorted(glob.glob(os.path.join(tile, "gt*"))):
+                gts.append(Gt(gt, os.path.basename(gt)))
+        hwmon = glob.glob(os.path.join(dev, "hwmon", "hwmon*"))
+        power = Power(hwmon[0]) if hwmon else None
+        monitors.append((os.path.basename(card), gts, power))
 
-    hwmon = glob.glob(os.path.join(dev, "hwmon", "hwmon*"))
-    power = Power(hwmon[0]) if hwmon else None
+    print(f"monitoring {len(monitors)} Intel Arc card(s)")
+    for _, gts, power in monitors:
+        for gt in gts:
+            gt.sample()
+        if power:
+            power.sample()
 
-    for gt in gts:
-        gt.sample()
-    if power:
-        power.sample()
+    ncols = max((len(m[1]) for m in monitors), default=1)
+    labels = []
+    for _, _, power in monitors:
+        if power:
+            labels = list(power.labels.values())
+            break
 
-    header = "  ".join(
-        [f"{gt.name:>6s}busy  freq(MHz)" for gt in gts]
-        + [f"{lbl:>7s}W" for lbl in (power.labels.values() if power else [])]
-        + ["pkg(C)", "vram(C)"]
-    )
+    def fmt_busy(b):
+        return f"{b:5.1f}%" if b is not None else "  n/a"
+
+    def fmt_freq(f):
+        return f"{f:>5s}" if f is not None else "  n/a"
+
+    header = [" " * 4]
+    for gi in range(ncols):
+        header += [f"gt{gi}busy", "gt" + str(gi) + "MHz"]
+    header += [lbl for lbl in labels] + ["pkg(C)", "vram(C)"]
+    header = " ".join(f"{h:>6s}" for h in header)
     print(header)
     print("-" * len(header))
 
     n = 0
+    warned = False
     while args.count == 0 or n < args.count:
         time.sleep(args.interval)
         n += 1
-        parts = []
-        for gt in gts:
-            busy, cur, act = gt.sample()
-            b = f"{busy:5.1f}%" if busy is not None else "  n/a"
-            freq = cur if cur is not None else "?"
-            parts.append(f"{gt.name:>6s} {b:>6s} {freq:>8s}")
-        if power:
-            w = power.sample()
-            parts.append("  ".join(f"{w.get(lbl, 0):7.1f}" for lbl in power.labels.values()))
-            t = power.temps()
-            parts.append(f"{t.get('pkg', float('nan')):7.1f} {t.get('vram', float('nan')):7.1f}")
-        print("  ".join(parts), flush=True)
+        if not warned and any(gt.frozen for _, gts, _ in monitors for gt in gts):
+            warned = True
+            print("note: gtidle idle_residency counter is not advancing; busy% is estimated from cur_freq", flush=True)
+        for card, gts, power in monitors:
+            cells = [f"{card:>6s}"]
+            for gt in gts:
+                busy, cur, act = gt.sample()
+                cells.append(fmt_busy(busy))
+                cells.append(fmt_freq(cur))
+            if power:
+                w = power.sample()
+                cells += [f"{w.get(lbl, 0):6.1f}" for lbl in labels]
+                t = power.temps()
+                cells += [f"{t.get('pkg', float('nan')):6.1f}", f"{t.get('vram', float('nan')):6.1f}"]
+            print(" ".join(cells), flush=True)
 
 
 if __name__ == "__main__":
