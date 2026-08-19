@@ -70,6 +70,13 @@ class ServerState:
         with self._lock:
             self._progress = ""
 
+    def reset_log(self) -> None:
+        """Start a fresh log for a new job (clears history and counters)."""
+        with self._lock:
+            self._log = []
+            self._seq = 0
+            self._progress = ""
+
     def get_log(self, since: int) -> dict:
         with self._lock:
             # If the client's counter is behind the trimmed window, hand it
@@ -208,6 +215,7 @@ async def generate(req: GenerateRequest):
     out_name = f"ltx_{stamp}.mp4"
 
     async with _job_lock:
+        STATE.reset_log()  # fresh log + counters for this job
         STATE.status = "running"
         STATE.mode = req.mode
         STATE.prompt = req.prompt
