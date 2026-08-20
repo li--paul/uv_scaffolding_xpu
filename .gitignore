@@ -13,3 +13,6 @@ __pycache__/
 
 # NEO compute-runtime debug dump
 igdrcl_dumped.config
+
+# generated videos
+output/*.mp4
