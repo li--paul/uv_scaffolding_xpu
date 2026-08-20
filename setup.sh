@@ -37,10 +37,12 @@ if [ ! -x "$LTX_VENV/bin/python" ]; then
         -e "$LTX_ROOT/packages/ltx-core" -e "$LTX_ROOT/packages/ltx-pipelines"
 fi
 
-# XPU patches for LTX-2. Two local edits are required because the repo only
-# knows CUDA/MPS/CPU: (1) make the default device selector return XPU, and
+# XPU patches for LTX-2. Local edits are required because the repo only
+# knows CUDA/MPS/CPU: (1) make the default device selector return XPU,
 # (2) keep the audio vocoder in fp32 on XPU (no fp32 autocast for conv ops,
-# same as MPS). Applied idempotently.
+# same as MPS), and (3) exclude the cuDNN SDPA backend on XPU (it raises
+# CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH; MATH is the reliable XPU path).
+# Applied idempotently.
 DEVICES="$LTX_ROOT/packages/ltx-core/src/ltx_core/devices.py"
 if ! grep -q 'torch.xpu.is_available()' "$DEVICES"; then
     perl -0pi -e 's/    if is_mps_available\(\):\n        return torch\.device\("mps"\)\n    return torch\.device\("cpu"\)/    if is_mps_available():\n        return torch.device("mps")\n    if torch.xpu.is_available():\n        return torch.device("xpu")\n    return torch.device("cpu")/' "$DEVICES"
@@ -48,6 +50,10 @@ fi
 BLOCKS="$LTX_ROOT/packages/ltx-pipelines/src/ltx_pipelines/utils/blocks.py"
 if ! grep -q 'self._device.type in ("mps", "xpu")' "$BLOCKS"; then
     perl -0pi -e 's/vocoder_dtype = torch\.float32 if self\._device\.type == "mps" else self\._dtype/vocoder_dtype = (torch.float32 if self._device.type in ("mps", "xpu") else self._dtype)/' "$BLOCKS"
+fi
+ATTENTION="$LTX_ROOT/packages/ltx-core/src/ltx_core/model/transformer/attention.py"
+if ! grep -q 'torch.xpu.is_available():' "$ATTENTION"; then
+    perl -0pi -e 's/    return PytorchAttention\(priority=list\(_SDPA_FULL_PRIORITY\)\)/    if torch.xpu.is_available():\n        return PytorchAttention(\n            priority=[\n                SDPBackend.EFFICIENT_ATTENTION,\n                SDPBackend.MATH,\n            ]\n        )\n    return PytorchAttention(priority=list(_SDPA_FULL_PRIORITY))/' "$ATTENTION"
 fi
 
 # Intel oneAPI toolchain + oneCCL (needed to build vllm for XPU). No-op when
