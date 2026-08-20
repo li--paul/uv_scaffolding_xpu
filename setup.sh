@@ -22,20 +22,41 @@ CUSTOM_NODES="$ROOT/vendor/ComfyUI/custom_nodes/ComfyUI-H3-Motion-Context"
 
 # LTX-2 (Lightricks) test env. Its own separate venv (isolates the transformers
 # version and any CUDA-only extras from the main .venv), reusing the XPU torch
-# stack from the pytorch-xpu index. Never install the repo's `natten` extra --
-# it pins torch==2.13.0+cu132 and would replace the XPU build.
+# stack from the pytorch-xpu index.
+#
+# The LTX-2 repo's own packages/ltx-core/pyproject.toml declares
+#   [tool.uv.sources] torch = { index = "torch" }  # -> cu132 index
+# which, if we install ltx-core as an editable with dependency resolution, pulls
+# the CUDA torch (broken on this XPU host). To keep the XPU build we therefore
+# install the xpu torch stack first (explicit index, no editable sources), then
+# install ltx-core/ltx-pipelines with --no-deps so their cu132 source can never
+# re-resolve torch. Never install the repo's `natten` extra -- it pins
+# torch==2.13.0+cu132 and would replace the XPU build.
 LTX_ROOT="$ROOT/vendor/LTX-2"
 [ -d "$LTX_ROOT" ] || git clone --depth 1 https://github.com/Lightricks/LTX-2.git "$LTX_ROOT"
 LTX_VENV="$LTX_ROOT/.venv"
 if [ ! -x "$LTX_VENV/bin/python" ]; then
     uv venv "$LTX_VENV" --python 3.12
-    uv pip install --python "$LTX_VENV/bin/python" \
-        --index-strategy unsafe-best-match \
-        --index-url https://download.pytorch.org/whl/xpu \
-        --extra-index-url https://pypi.org/simple \
-        "torch==2.12.0" "torchaudio==2.11.0" "torchvision==0.27.0" \
-        -e "$LTX_ROOT/packages/ltx-core" -e "$LTX_ROOT/packages/ltx-pipelines"
 fi
+# 1) XPU torch stack + the non-torch deps ltx needs (with resolution; torch
+#    pinned to xpu). transformers is pinned <5.15 per ltx-core's constraint
+#    (5.15.0 breaks the Gemma 4 encoder).
+uv pip install --python "$LTX_VENV/bin/python" \
+    --index-strategy unsafe-best-match \
+    --index-url https://download.pytorch.org/whl/xpu \
+    --extra-index-url https://pypi.org/simple \
+    --reinstall-package torch --reinstall-package torchaudio --reinstall-package torchvision \
+    "torch==2.12.0" "torchaudio==2.11.0" "torchvision==0.27.0" \
+    "transformers>=5.8,<5.15" \
+    "einops" "numpy" "safetensors" "accelerate" "scipy>=1.14" \
+    "av" "tqdm" "pillow" "openimageio" "cloudpickle>=3.1"
+# 2) ltx packages with --no-deps so their cu132 torch source cannot override.
+uv pip install --python "$LTX_VENV/bin/python" \
+    --index-strategy unsafe-best-match \
+    --index-url https://download.pytorch.org/whl/xpu \
+    --extra-index-url https://pypi.org/simple \
+    --no-deps \
+    -e "$LTX_ROOT/packages/ltx-core" -e "$LTX_ROOT/packages/ltx-pipelines"
 
 # XPU patches for LTX-2. Local edits are required because the repo only
 # knows CUDA/MPS/CPU: (1) make the default device selector return XPU,
