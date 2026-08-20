@@ -109,6 +109,11 @@
       </label>
     </div>
     <div style="margin-top:14px;">
+      <label for="frames">Frames (duration)</label>
+      <input type="number" id="frames" min="1" max="1024" value="33" step="1">
+      <div class="meta" id="framesHint">Snapped to 8k+1 grid &middot; 33 frames &asymp; 1.38 s @ 24fps</div>
+    </div>
+    <div style="margin-top:14px;">
       <label for="prompt">Prompt</label>
       <textarea id="prompt" rows="4" placeholder="Describe the video you want..."></textarea>
     </div>
@@ -146,9 +151,16 @@ function setStatus(s) {
   $("genBtn").disabled = (s === "running");
 }
 
+function snapFrames(f) {
+  f = parseInt(f, 10);
+  if (isNaN(f) || f < 1) return 1;
+  return ((Math.max(f, 1) - 1) / 8 | 0) * 8 + 1;   // floor to 8k+1
+}
+
 async function startJob() {
   const prompt = $("prompt").value.trim();
   const mode = document.querySelector('input[name="mode"]:checked').value;
+  const frames = snapFrames($("frames").value);
   if (!prompt) { alert("Please enter a prompt."); return; }
   // Flip to running immediately on click for instant feedback.
   setStatus("running");
@@ -159,7 +171,7 @@ async function startJob() {
     const r = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode, prompt }),
+      body: JSON.stringify({ mode, prompt, frames }),
     });
     if (!r.ok) {
       const e = await r.json().catch(() => ({}));
@@ -246,15 +258,29 @@ async function refreshVideos() {
   } catch (e) { /* ignore */ }
 }
 
-// Mode card selection visuals
+// Mode card selection visuals + default frames per mode
+const MODE_DEFAULT_FRAMES = { "8": 33, "50": 121 };
+function updateFramesHint() {
+  const raw = parseInt($("frames").value, 10);
+  const snapped = snapFrames(raw);
+  $("framesHint").textContent =
+    "Snapped to 8k+1 grid · " + snapped + " frames ≈ " +
+    (snapped / 24).toFixed(2) + " s @ 24fps" +
+    (raw !== snapped ? " (was " + raw + ")" : "");
+}
 document.querySelectorAll(".mode-card").forEach(card => {
   card.addEventListener("click", () => {
     document.querySelectorAll(".mode-card").forEach(c => c.classList.remove("selected"));
     card.classList.add("selected");
+    const m = card.querySelector('input[name="mode"]').value;
+    $("frames").value = MODE_DEFAULT_FRAMES[m];
+    updateFramesHint();
   });
 });
+$("frames").addEventListener("input", updateFramesHint);
 
 $("genBtn").addEventListener("click", startJob);
+updateFramesHint();
 
 // Initial load
 (async () => {

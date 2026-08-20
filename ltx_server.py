@@ -44,6 +44,7 @@ class ServerState:
         self.status = "idle"  # idle | running | done | error
         self.mode = "50"
         self.prompt = ""
+        self.frames = None
         self.job_id = ""
         self.video = None  # filename relative to OUTPUT_DIR
         self.error_msg = None
@@ -97,6 +98,7 @@ class ServerState:
                 "status": self.status,
                 "mode": self.mode,
                 "prompt": self.prompt,
+                "frames": self.frames,
                 "job_id": self.job_id,
                 "video": self.video,
                 "error": self.error_msg,
@@ -113,6 +115,16 @@ STATE = ServerState()
 class GenerateRequest(BaseModel):
     mode: str = Field(pattern="^(8|50)$")
     prompt: str = Field(min_length=1, max_length=2000)
+    frames: int | None = Field(default=None, ge=1, le=1024)
+
+
+def snap_frames_to_grid(frames: int) -> int:
+    """Snap a frame count to the LTX-2 VAE temporal grid (num_frames = 8k + 1).
+
+    Makes user-supplied frame counts valid for the diffusion model; the raw
+    value is floored to the nearest 8k+1 point (min 1).
+    """
+    return ((max(frames, 1) - 1) // 8) * 8 + 1
 
 
 def _stream_lines(proc: asyncio.subprocess.Process, tag: str) -> None:
@@ -156,15 +168,19 @@ def _stream_lines(proc: asyncio.subprocess.Process, tag: str) -> None:
     asyncio.ensure_future(_drain(getattr(proc, tag)))
 
 
-async def _run_job(mode: str, prompt: str, out_name: str, job_id: str) -> None:
+async def _run_job(mode: str, prompt: str, out_name: str, job_id: str, frames: int | None = None) -> None:
     """Run a single generation job on the server's event loop."""
     args = []
     if mode == "8":
         args = ["--distilled"]
     args += ["--prompt", prompt, "--output-path", str(OUTPUT_DIR / out_name)]
+    if frames is not None:
+        args += ["--num-frames", str(frames)]
 
     STATE.append_log(f"\n=== JOB {job_id} :: {mode}-step mode ===")
     STATE.append_log(f"prompt: {prompt}\n")
+    if frames is not None:
+        STATE.append_log(f"frames: {frames} ({frames / 24.0:.2f}s @ 24fps)\n")
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -214,12 +230,17 @@ async def generate(req: GenerateRequest):
     job_id = f"{stamp}-{os.getpid()}"
     out_name = f"ltx_{stamp}.mp4"
 
+    # Snap any user-supplied frame count to the VAE's 8k+1 grid so it is
+    # always a valid length for the diffusion model.
+    frames = snap_frames_to_grid(req.frames) if req.frames is not None else None
+
     # Mark state as running immediately, then run the job in a background task
     # so the request returns at once and the UI can flip idle -> running instantly.
     STATE.reset_log()  # fresh log + counters for this job
     STATE.status = "running"
     STATE.mode = req.mode
     STATE.prompt = req.prompt
+    STATE.frames = frames
     STATE.job_id = job_id
     STATE.video = None
     STATE.error_msg = None
@@ -230,16 +251,16 @@ async def generate(req: GenerateRequest):
     )
 
     asyncio.create_task(
-        _run_job_locked(req.mode, req.prompt, out_name, job_id)
+        _run_job_locked(req.mode, req.prompt, out_name, job_id, frames)
     )
 
-    return {"job_id": job_id, "output": out_name}
+    return {"job_id": job_id, "output": out_name, "frames": frames}
 
 
-async def _run_job_locked(mode: str, prompt: str, out_name: str, job_id: str) -> None:
+async def _run_job_locked(mode: str, prompt: str, out_name: str, job_id: str, frames: int | None = None) -> None:
     """Acquire the job lock and run the generation as a background task."""
     async with _job_lock:
-        await _run_job(mode, prompt, out_name, job_id)
+        await _run_job(mode, prompt, out_name, job_id, frames)
 
 
 @app.get("/api/status")
